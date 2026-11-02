@@ -2,7 +2,11 @@
 
 <img src="./resources/assets/logo.svg" width="260" alt="SilkWM logo" />
 
-# SilkWM
+</div>
+
+---
+
+<div align="center">
 
 **An actually smooth window manager.**
 
