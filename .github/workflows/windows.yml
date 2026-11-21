@@ -12,6 +12,8 @@ jobs:
           go-version: '1.24.x'
           cache: false
       - run: go test ./...
+        env:
+          SILK_RENDER_PREVIEW: Silk-desktop.jpg
       - run: go build -trimpath -ldflags="-H windowsgui -s -w" -o Silk.exe .
       - name: Check Windows setup scripts and launch
         shell: powershell
@@ -49,5 +51,11 @@ jobs:
           name: Silk-Windows-x64
           path: |
             Silk.exe
+            assets/midnight-silk.jpg
             setup/
             README.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Silk-preview
+          path: Silk-desktop.jpg

@@ -330,10 +330,22 @@ func windowProc(hwnd uintptr, message uintptr, wparam uintptr, lparam uintptr) u
 			app.surfaces.fade(false)
 		}
 		return 0
+	case 0x2c:
+		return measureMenu(lparam)
+	case 0x2b:
+		return paintMenu(lparam)
 	case wmReflow:
 		app.schedule()
 		return 0
 	case wmTimer:
+		if wparam == 5 {
+			app.surfaces.wallpaper.frame()
+			return 0
+		}
+		if wparam == 4 {
+			app.surfaces.wallpaper.refresh(false)
+			return 0
+		}
 		if wparam == 2 {
 			app.animate()
 			return 0
@@ -350,6 +362,8 @@ func windowProc(hwnd uintptr, message uintptr, wparam uintptr, lparam uintptr) u
 		}
 		return 0
 	case wmDisplayChange, wmSettingChange:
+		app.surfaces.updateMotion()
+		app.surfaces.wallpaper.refresh(true)
 		app.surfaces.placeBar()
 		app.schedule()
 		return 0
@@ -382,24 +396,24 @@ func (c *controller) showMenu() {
 	if menu == 0 {
 		return
 	}
-	text := "Pause tiling"
-	flag := uintptr(mfString)
-	if c.paused {
-		text = "Resume tiling"
-		flag |= mfChecked
+	items := menuRows(c.paused)
+	for _, row := range items {
+		called(pAppendMenu, menu, 0x100, uintptr(row.id), uintptr(row.id))
+		// Supply names to accessibility clients as well as painting each row.
+		name := ptr(row.title)
+		entry := menuItemInfo{Size: uint32(unsafe.Sizeof(menuItemInfo{})), Mask: 0x40, Text: name}
+		called(user32.NewProc("SetMenuItemInfoW"), menu, uintptr(row.id), 0, uintptr(unsafe.Pointer(&entry)))
 	}
-	called(pAppendMenu, menu, flag, menuPause, uintptr(unsafe.Pointer(ptr(text))))
-	called(pAppendMenu, menu, mfString, menuArrange, uintptr(unsafe.Pointer(ptr("Rearrange windows"))))
-	called(pAppendMenu, menu, mfSeparator, 0, 0)
-	for i, label := range []string{"Edit profile…", "Reload profile", "Preview desktop fade", "Restart Windows…"} {
-		called(pAppendMenu, menu, mfString, uintptr(103+i), uintptr(unsafe.Pointer(ptr(label))))
-	}
-	called(pAppendMenu, menu, mfString, menuExit, uintptr(unsafe.Pointer(ptr("Exit Silk"))))
+	pal := colors()
+	brush := solid(pal.surface)
+	mi := menuInfo{Size: uint32(unsafe.Sizeof(menuInfo{})), Mask: 2, Background: brush}
+	called(user32.NewProc("SetMenuInfo"), menu, uintptr(unsafe.Pointer(&mi)))
 	var pt point
 	called(pGetCursorPos, uintptr(unsafe.Pointer(&pt)))
 	called(pSetForegroundWindow, c.window)
-	choice := called(pTrackPopupMenu, menu, tpmRightButton|tpmReturnCmd, uintptr(pt.X), uintptr(pt.Y), 0, c.window, 0)
+	choice := called(pTrackPopupMenu, menu, tpmRightButton|tpmReturnCmd|0x1000, uintptr(pt.X), uintptr(pt.Y), 0, c.window, 0)
 	called(pDestroyMenu, menu)
+	called(pDeleteObject, brush)
 	called(pPostMessage, c.window, 0, 0, 0)
 	switch choice {
 	case menuPause:
@@ -439,6 +453,11 @@ func (c *controller) showMenu() {
 		if called(pMessageBox, c.window, uintptr(unsafe.Pointer(ptr("Restart Windows now? Save your work first."))), uintptr(unsafe.Pointer(ptr("Silk"))), 0x124) == 6 {
 			c.surfaces.fade(true)
 		}
+	case 107:
+		if e := setSilkWallpaper(); e != nil {
+			alert(e.Error())
+		}
+		c.surfaces.wallpaper.refresh(true)
 	case menuExit:
 		called(pPostMessage, c.window, wmClose, 0, 0)
 	}

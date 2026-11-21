@@ -17,23 +17,9 @@ function Wait-StorageFile($Operation) {
     $task.GetAwaiter().GetResult()
 }
 if (!$Image) {
-    $dir = Join-Path $env:APPDATA 'Silk'
-    $null = New-Item -ItemType Directory -Force $dir
-    $profileFile = Join-Path $dir 'profile.json'
-    $color = '#195AB4'
-    if (Test-Path -LiteralPath $profileFile) {
-        $custom = (Get-Content -Raw -Encoding UTF8 $profileFile | ConvertFrom-Json).transition
-        if ($custom) { $color = $custom }
-    }
-    if ($color -notmatch '^#[a-fA-F0-9]{6}$') { throw 'Expected a #RRGGBB transition colour.' }
-    Add-Type -AssemblyName System.Drawing
-    $Image = Join-Path $dir 'silk-lock.png'
-    $bitmap = New-Object Drawing.Bitmap 1920,1080
-    $graphics = [Drawing.Graphics]::FromImage($bitmap)
-    try {
-        $graphics.Clear([Drawing.ColorTranslator]::FromHtml($color))
-        $bitmap.Save($Image,[Drawing.Imaging.ImageFormat]::Png)
-    } finally { $graphics.Dispose(); $bitmap.Dispose() }
+    # Use the packaged desktop artwork for a continuous sign-in background.
+    $Image = Join-Path $PSScriptRoot '..\assets\midnight-silk.jpg'
+
 }
 $path = (Get-Item -LiteralPath $Image).FullName
 $file = Wait-StorageFile ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path))

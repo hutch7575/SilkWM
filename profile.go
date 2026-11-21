@@ -12,6 +12,7 @@ import (
 )
 
 type Profile struct {
+	Accent        string   `json:"accent"`
 	Gap           int32    `json:"gap"`
 	MasterPercent int32    `json:"masterPercent"`
 	MotionMS      int      `json:"motionMs"`
@@ -24,7 +25,7 @@ type Profile struct {
 }
 
 func defaults() Profile {
-	return Profile{12, 60, 180, 32, []string{"silk", "status", "clock"}, "#181B20", "#E7EAF0", "#195AB4", 550}
+	return Profile{Accent: "auto", Gap: 12, MasterPercent: 60, MotionMS: 180, BarHeight: 40, Widgets: []string{"silk", "status", "date", "clock"}, Surface: "#10131B", Text: "#E8EBF2", Transition: "#195AB4", FadeMS: 550}
 }
 func colorRef(s string) (uintptr, error) {
 	if len(s) != 7 || s[0] != '#' {
@@ -46,6 +47,11 @@ func parseProfile(b []byte) (Profile, error) {
 	}
 	if p.Gap < 0 || p.Gap > 100 || p.MasterPercent < 10 || p.MasterPercent > 90 || p.MotionMS < 0 || p.MotionMS > 1500 || p.BarHeight < 0 || p.BarHeight > 100 || p.FadeMS < 0 || p.FadeMS > 3000 {
 		return p, errors.New("value outside supported range (see README)")
+	}
+	if p.Accent != "auto" {
+		if _, e := colorRef(p.Accent); e != nil {
+			return p, errors.New("accent must be auto or #RRGGBB")
+		}
 	}
 	for _, v := range []string{p.Surface, p.Text, p.Transition} {
 		if _, e := colorRef(v); e != nil {

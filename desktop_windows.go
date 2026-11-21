@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+
 	"syscall"
 	"time"
 	"unsafe"
@@ -23,7 +23,7 @@ func (c *controller) animate() {
 			delete(c.moves, h)
 			continue
 		}
-		t := progress(now.Sub(m.start), c.profile.MotionMS)
+		t := progress(now.Sub(m.start), c.surfaces.duration(c.profile.MotionMS))
 		r := interpolate(m.from, m.to, t)
 		called(pSetWindowPos, h, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Width()), uintptr(r.Height()), swpNoZOrder|swpNoActivate|swpNoOwnerZOrder|0x4000)
 		if t >= 1 {
@@ -50,6 +50,8 @@ type paintStruct struct {
 	Reserved        [32]byte
 }
 type desktopUI struct {
+	reduceMotion                    bool
+	wallpaper                       wallpaperWatcher
 	reserved                        Rectangle
 	bar, overlay                    uintptr
 	registered, placing, restarting bool
@@ -82,6 +84,9 @@ func (u *desktopUI) start(c *controller) {
 	u.bar = makeWindow(8, "Silk bar")
 	u.overlay = makeWindow(8|0x80000|0x20, "Silk transition")
 	called(wts.NewProc("WTSRegisterSessionNotification"), c.window, 0)
+	u.updateMotion()
+	u.wallpaper.refresh(true)
+	called(pSetTimer, c.window, 4, 1000, 0)
 	u.resetBar()
 	u.fade(false)
 }
@@ -126,7 +131,7 @@ func (u *desktopUI) placeBar() {
 		return
 	}
 	d := appBarData{Edge: 1, Rect: mi.Monitor}
-	height := app.profile.BarHeight
+	height := scale(u.bar, app.profile.BarHeight)
 	d.Rect.Bottom = d.Rect.Top + height
 	u.ab(2, &d)
 	d.Rect.Bottom = d.Rect.Top + height
@@ -153,6 +158,11 @@ func (u *desktopUI) stop(c *controller) {
 func surfaceProc(h, msg, w, l uintptr) uintptr {
 	u := &app.surfaces
 	switch msg {
+	case 0x02e0: // WM_DPICHANGED
+		if h == u.bar {
+			u.placeBar()
+		}
+		return 0
 	case wmBar:
 		if w == 1 {
 			u.placeBar()
@@ -180,57 +190,21 @@ func surfaceProc(h, msg, w, l uintptr) uintptr {
 		dc := called(user32.NewProc("BeginPaint"), h, uintptr(unsafe.Pointer(&p)))
 		var r Rectangle
 		called(user32.NewProc("GetClientRect"), h, uintptr(unsafe.Pointer(&r)))
-		bg := app.profile.Surface
-		if h == u.overlay {
-			bg = app.profile.Transition
-		}
-		col, _ := colorRef(bg)
-		brush := called(gdi32.NewProc("CreateSolidBrush"), col)
-		called(user32.NewProc("FillRect"), dc, uintptr(unsafe.Pointer(&r)), brush)
-		called(pDeleteObject, brush)
 		if h == u.bar {
-			var widgets []string
-			for _, key := range app.profile.Widgets {
-				switch key {
-				case "silk":
-					widgets = append(widgets, "Silk")
-				case "status":
-					s := "Tiling"
-					if app.paused {
-						s = "Paused"
-					}
-					widgets = append(widgets, s)
-				case "clock":
-					widgets = append(widgets, time.Now().Format("15:04"))
-				case "date":
-					widgets = append(widgets, time.Now().Format("Mon 02 Jan"))
-				}
-			}
-			r.Left += 12
-			r.Right -= 12
-			drawText(dc, r, strings.Join(widgets, "     ·     "), 0x8024)
-		} else if u.restarting {
-			drawText(dc, r, "Restarting…", 0x25)
+			paintBufferedBar(dc, r)
+		} else if h == u.overlay {
+			paintTransition(dc, r, u.restarting)
 		}
 		called(user32.NewProc("EndPaint"), h, uintptr(unsafe.Pointer(&p)))
 		return 0
 	}
 	return called(pDefWindowProc, h, msg, w, l)
 }
-func drawText(dc uintptr, r Rectangle, label string, flags uintptr) {
-	color, _ := colorRef(app.profile.Text)
-	called(gdi32.NewProc("SetTextColor"), dc, color)
-	called(gdi32.NewProc("SetBkMode"), dc, 1)
-	font := called(gdi32.NewProc("GetStockObject"), 17)
-	old := called(gdi32.NewProc("SelectObject"), dc, font)
-	called(user32.NewProc("DrawTextW"), dc, uintptr(unsafe.Pointer(ptr(label))), ^uintptr(0), uintptr(unsafe.Pointer(&r)), flags)
-	called(gdi32.NewProc("SelectObject"), dc, old)
-}
 func (u *desktopUI) fade(restart bool) {
 	if u.restarting {
 		return
 	}
-	if app.profile.FadeMS == 0 || u.overlay == 0 {
+	if u.duration(app.profile.FadeMS) == 0 || u.overlay == 0 {
 		if restart {
 			restartWindows()
 		}
@@ -250,7 +224,7 @@ func (u *desktopUI) fade(restart bool) {
 	called(pSetTimer, app.window, 3, 16, 0)
 }
 func (u *desktopUI) frame() {
-	t := progress(time.Since(u.startTime), app.profile.FadeMS)
+	t := progress(time.Since(u.startTime), u.duration(app.profile.FadeMS))
 	opacity := 1 - t
 	if u.restarting {
 		opacity = t
@@ -271,4 +245,17 @@ func restartWindows() {
 	if e := cmd.Run(); e != nil {
 		alert(e.Error())
 	}
+}
+
+func (u *desktopUI) updateMotion() {
+	var enabled int32
+	if called(systemParameters, 0x1042, 0, uintptr(unsafe.Pointer(&enabled)), 0) != 0 {
+		u.reduceMotion = enabled == 0
+	}
+}
+func (u *desktopUI) duration(ms int) int {
+	if u.reduceMotion {
+		return 0
+	}
+	return ms
 }
