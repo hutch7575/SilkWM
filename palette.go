@@ -103,7 +103,17 @@ func wallpaperColor(img image.Image) (uintptr, bool) {
 	if best.weight == 0 {
 		return 0, false
 	}
-	return rgb(int(255*best.r/best.weight), int(255*best.g/best.weight), int(255*best.b/best.weight)), true
+	r, g, b := best.r/best.weight, best.g/best.weight, best.b/best.weight
+	// Lift the value of deep chromatic fabric before contrast correction.
+	// Adding white directly to a near-black blue would make it look grey.
+	peak := max(r, g, b)
+	if peak > 0 && peak < .78 && peak-min(r, g, b) > .08 {
+		gain := .78 / peak
+		r *= gain
+		g *= gain
+		b *= gain
+	}
+	return rgb(int(255*r), int(255*g), int(255*b)), true
 }
 func sampleFile(path string) (uintptr, error) {
 	f, e := os.Open(path)
