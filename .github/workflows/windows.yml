@@ -43,7 +43,8 @@ jobs:
           public class SilkSmoke {
             [DllImport("user32", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls,string title);
             [DllImport("user32",CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent,IntPtr after,string cls,string name);
-            [DllImport("user32",CharSet=CharSet.Unicode)] public static extern bool SetWindowText(IntPtr h,string value);
+            [DllImport("user32")] public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32",CharSet=CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h,uint msg,IntPtr w,System.Text.StringBuilder buffer);
             [DllImport("user32")] public static extern bool PostMessage(IntPtr hwnd,uint msg,IntPtr w,IntPtr l);
           }
           '@
@@ -68,11 +69,20 @@ jobs:
             for ($i=0;$i -lt 80;$i++){
               $finder=[SilkSmoke]::FindWindow('SilkFinder','Silk App Finder')
               $edit=[SilkSmoke]::FindWindowEx($finder,0,'Edit',$null)
-              if ($finder -ne [IntPtr]::Zero -and $edit -ne [IntPtr]::Zero){break}
+              if ($finder -ne [IntPtr]::Zero -and $edit -ne [IntPtr]::Zero -and [SilkSmoke]::IsWindowVisible($finder)){break}
               Start-Sleep -Milliseconds 100
             }
-            if ($edit -eq [IntPtr]::Zero){throw 'Finder edit missing'}
-            $null=[SilkSmoke]::SetWindowText($edit,'silk finder fixture')
+            if ($edit -eq [IntPtr]::Zero -or ![SilkSmoke]::IsWindowVisible($finder)){throw 'Finder did not open'}
+            foreach ($letter in 'silk finder fixture'.ToCharArray()) {
+              $null=[SilkSmoke]::PostMessage($edit,0x102,[int]$letter,1)
+            }
+            $value=New-Object Text.StringBuilder 200
+            for ($i=0;$i -lt 20;$i++){
+              $null=[SilkSmoke]::SendMessage($edit,0xd,200,$value)
+              if ($value.ToString() -eq 'silk finder fixture'){break}
+              Start-Sleep -Milliseconds 100
+            }
+            if ($value.ToString() -ne 'silk finder fixture'){throw "Finder did not receive the fixture query: $value"}
             for ($i=0;$i -lt 30;$i++){
               $null=[SilkSmoke]::PostMessage($edit,0x100,13,0)
               Start-Sleep -Milliseconds 250
