@@ -10,6 +10,9 @@ func (r Rectangle) Height() int32 { return r.Bottom - r.Top }
 // one window fills the work area; for two or more, the first gets ~60% on
 // the left and the others form an equally spaced stack on the right.
 func calculateTiles(work Rectangle, count int, gap int32) []Rectangle {
+	return masterTiles(work, count, gap, 60)
+}
+func masterTiles(work Rectangle, count int, gap, percent int32) []Rectangle {
 	if count <= 0 || work.Width() < 80 || work.Height() < 80 {
 		return nil
 	}
@@ -36,7 +39,7 @@ func calculateTiles(work Rectangle, count int, gap int32) []Rectangle {
 	if innerWidth < 2 {
 		return nil
 	}
-	masterWidth := (innerWidth * 3) / 5
+	masterWidth := (innerWidth * percent) / 100
 	if masterWidth < 1 {
 		masterWidth = 1
 	}

@@ -6,8 +6,13 @@ import (
 	"bytes"
 	_ "embed"
 	"image/png"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -202,6 +207,11 @@ type controller struct {
 	original       map[uintptr]windowPlacement
 	order          map[uintptr]uint64
 	nextOrder      uint64
+	profile        Profile
+	groups         map[uintptr][]windowItem
+	shell          uintptr
+	moves          map[uintptr]move
+	surfaces       desktopUI
 	taskbarMessage uint32
 }
 
@@ -210,6 +220,7 @@ func called(p *syscall.LazyProc, args ...uintptr) uintptr { r, _, _ := p.Call(ar
 func isWindow(h uintptr) bool                             { return called(pIsWindow, h) != 0 }
 
 func main() {
+	runtime.LockOSThread()
 	// Keep coordinates in physical pixels on mixed-DPI, multi-monitor setups.
 	if called(pSetProcessDpiAwarenessContext, ^uintptr(3)) == 0 {
 		called(pSetProcessDPIAware)
@@ -219,22 +230,28 @@ func main() {
 		return
 	}
 	if err == syscall.Errno(183) { // ERROR_ALREADY_EXISTS
-		called(pMessageBox, 0, uintptr(unsafe.Pointer(ptr("SilkWM is already running in the notification area."))), uintptr(unsafe.Pointer(ptr("SilkWM"))), 0x40)
+		called(pMessageBox, 0, uintptr(unsafe.Pointer(ptr("Silk is already running in the notification area."))), uintptr(unsafe.Pointer(ptr("Silk"))), 0x40)
 		called(pCloseHandle, mutex)
 		return
 	}
 	app = &controller{mutex: mutex, original: make(map[uintptr]windowPlacement), order: make(map[uintptr]uint64)}
+	app.profile, err = readProfile()
+	if err != nil {
+		alert(err.Error())
+		app.profile = defaults()
+	}
+	app.moves = make(map[uintptr]move)
 	app.run()
 }
 
 func (c *controller) run() {
 	inst := called(pGetModuleHandle, 0)
-	name := ptr("SilkWMPrototypeHiddenWindow")
+	name := ptr("SilkPrototypeHiddenWindow")
 	wc := wndClass{Size: uint32(unsafe.Sizeof(wndClass{})), WndProc: syscall.NewCallback(windowProc), Instance: inst, ClassName: name}
 	if called(pRegisterClassEx, uintptr(unsafe.Pointer(&wc))) == 0 {
 		return
 	}
-	c.window = called(pCreateWindowEx, 0, uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(ptr("SilkWM"))), 0, 0, 0, 0, 0, 0, 0, inst, 0)
+	c.window = called(pCreateWindowEx, 0, uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(ptr("Silk"))), 0, 0, 0, 0, 0, 0, 0, inst, 0)
 	if c.window == 0 {
 		return
 	}
@@ -242,6 +259,7 @@ func (c *controller) run() {
 	c.taskbarMessage = uint32(called(pRegisterWindowMessage, uintptr(unsafe.Pointer(ptr("TaskbarCreated")))))
 	c.addTray()
 	c.hookEvents()
+	c.surfaces.start(c)
 	c.schedule()
 	var m msg
 	for {
@@ -255,6 +273,7 @@ func (c *controller) run() {
 	for _, hook := range c.hooks {
 		called(pUnhookWinEvent, hook)
 	}
+	c.surfaces.stop(c)
 	c.restoreAll()
 	called(pShellNotifyIcon, nimDelete, uintptr(unsafe.Pointer(&c.tray)))
 	if c.icon != 0 {
@@ -268,7 +287,7 @@ func (c *controller) run() {
 
 func (c *controller) addTray() {
 	c.tray = notifyIcon{Size: uint32(unsafe.Sizeof(notifyIcon{})), Hwnd: c.window, ID: trayID, Flags: nifMessage | nifIcon | nifTip, Callback: wmTray, Icon: c.icon}
-	copy(c.tray.Tip[:], syscall.StringToUTF16("SilkWM — automatic tiling"))
+	copy(c.tray.Tip[:], syscall.StringToUTF16("Silk — automatic tiling"))
 	called(pShellNotifyIcon, nimAdd, uintptr(unsafe.Pointer(&c.tray)))
 	c.tray.Version = notifyIconV4
 	called(pShellNotifyIcon, nimSetVersion, uintptr(unsafe.Pointer(&c.tray)))
@@ -276,7 +295,7 @@ func (c *controller) addTray() {
 
 func (c *controller) hookEvents() {
 	cb := syscall.NewCallback(eventProc)
-	for _, span := range [][2]uintptr{{eventCreate, eventHide}, {eventMinStart, eventMinEnd}, {eventForeground, eventForeground}} {
+	for _, span := range [][2]uintptr{{eventCreate, eventHide}, {eventMinStart, eventMinEnd}, {0x000B, 0x000B}, {eventForeground, eventForeground}} {
 		h := called(pSetWinEventHook, span[0], span[1], 0, cb, 0, 0, winEventOutOfCtx|winEventSkipOwn)
 		if h != 0 {
 			c.hooks = append(c.hooks, h)
@@ -287,6 +306,7 @@ func (c *controller) hookEvents() {
 func eventProc(_ uintptr, event uintptr, hwnd uintptr, object uintptr, child uintptr, _ uintptr, _ uintptr) uintptr {
 	if app != nil && app.window != 0 && hwnd != 0 && (object == 0 || event == eventForeground) && (child == 0 || event == eventForeground) {
 		if event == eventDestroy {
+			delete(app.moves, hwnd)
 			delete(app.order, hwnd)
 			delete(app.original, hwnd)
 		}
@@ -301,13 +321,27 @@ func windowProc(hwnd uintptr, message uintptr, wparam uintptr, lparam uintptr) u
 	}
 	if uint32(message) == app.taskbarMessage && app.taskbarMessage != 0 {
 		app.addTray()
+		app.surfaces.resetBar()
 		return 0
 	}
 	switch message {
+	case 0x02b1: // WM_WTSSESSION_CHANGE
+		if wparam == 8 {
+			app.surfaces.fade(false)
+		}
+		return 0
 	case wmReflow:
 		app.schedule()
 		return 0
 	case wmTimer:
+		if wparam == 2 {
+			app.animate()
+			return 0
+		}
+		if wparam == 3 {
+			app.surfaces.frame()
+			return 0
+		}
 		if wparam == timerReflow {
 			called(pKillTimer, hwnd, timerReflow)
 			if !app.paused {
@@ -316,6 +350,7 @@ func windowProc(hwnd uintptr, message uintptr, wparam uintptr, lparam uintptr) u
 		}
 		return 0
 	case wmDisplayChange, wmSettingChange:
+		app.surfaces.placeBar()
 		app.schedule()
 		return 0
 	case wmTray:
@@ -356,7 +391,10 @@ func (c *controller) showMenu() {
 	called(pAppendMenu, menu, flag, menuPause, uintptr(unsafe.Pointer(ptr(text))))
 	called(pAppendMenu, menu, mfString, menuArrange, uintptr(unsafe.Pointer(ptr("Rearrange windows"))))
 	called(pAppendMenu, menu, mfSeparator, 0, 0)
-	called(pAppendMenu, menu, mfString, menuExit, uintptr(unsafe.Pointer(ptr("Exit SilkWM"))))
+	for i, label := range []string{"Edit profile…", "Reload profile", "Preview desktop fade", "Restart Windows…"} {
+		called(pAppendMenu, menu, mfString, uintptr(103+i), uintptr(unsafe.Pointer(ptr(label))))
+	}
+	called(pAppendMenu, menu, mfString, menuExit, uintptr(unsafe.Pointer(ptr("Exit Silk"))))
 	var pt point
 	called(pGetCursorPos, uintptr(unsafe.Pointer(&pt)))
 	called(pSetForegroundWindow, c.window)
@@ -378,6 +416,29 @@ func (c *controller) showMenu() {
 			c.paused = false
 		}
 		c.schedule()
+	case 103:
+		path, e := profileFile()
+		if e == nil {
+			e = exec.Command(filepath.Join(os.Getenv("SystemRoot"), "System32", "notepad.exe"), path).Start()
+		}
+		if e != nil {
+			alert(e.Error())
+		}
+	case 104:
+		p, e := readProfile()
+		if e != nil {
+			alert(e.Error())
+			break
+		}
+		c.profile = p
+		c.surfaces.resetBar()
+		c.schedule()
+	case 105:
+		c.surfaces.fade(false)
+	case 106:
+		if called(pMessageBox, c.window, uintptr(unsafe.Pointer(ptr("Restart Windows now? Save your work first."))), uintptr(unsafe.Pointer(ptr("Silk"))), 0x124) == 6 {
+			c.surfaces.fade(true)
+		}
 	case menuExit:
 		called(pPostMessage, c.window, wmClose, 0, 0)
 	}
@@ -390,60 +451,65 @@ type windowItem struct {
 }
 
 func (c *controller) candidates() map[uintptr][]windowItem {
-	groups := make(map[uintptr][]windowItem)
-	shell := called(pGetShellWindow)
-	cb := syscall.NewCallback(func(h uintptr, _ uintptr) uintptr {
-		if h == c.window || h == shell || called(pIsWindowVisible, h) == 0 || called(pIsIconic, h) != 0 || called(pGetWindowTextLength, h) == 0 {
-			return 1
-		}
-		ex := called(pGetWindowLong, h, gwlExStyle)
-		if ex&(wsExToolWindow|wsExNoActivate) != 0 {
-			return 1
-		}
-		if called(pGetWindow, h, gwOwner) != 0 && ex&wsExAppWindow == 0 {
-			return 1
-		}
-		var cloaked uint32
-		if called(pDwmGetWindowAttribute, h, dwmwaCloaked, uintptr(unsafe.Pointer(&cloaked)), unsafe.Sizeof(cloaked)) == 0 && cloaked != 0 {
-			return 1
-		}
-		var name [128]uint16
-		called(pGetClassName, h, uintptr(unsafe.Pointer(&name[0])), 128)
-		switch syscall.UTF16ToString(name[:]) {
-		case "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "NotifyIconOverflowWindow":
-			return 1
-		}
-		monitor := called(pMonitorFromWindow, h, monitorNearest)
-		if monitor == 0 {
-			return 1
-		}
-		info := monitorInfo{Size: uint32(unsafe.Sizeof(monitorInfo{}))}
-		if called(pGetMonitorInfo, monitor, uintptr(unsafe.Pointer(&info))) == 0 {
-			return 1
-		}
-		var rect Rectangle
-		if called(pGetWindowRect, h, uintptr(unsafe.Pointer(&rect))) == 0 {
-			return 1
-		}
-		if rect.Width() < 90 || rect.Height() < 50 {
-			return 1
-		}
-		// Do not touch borderless fullscreen windows (including games).
-		style := called(pGetWindowLong, h, gwlStyle)
-		if style&wsCaption == 0 && rect.Width() >= info.Monitor.Width()-2 && rect.Height() >= info.Monitor.Height()-2 {
-			return 1
-		}
-		order, ok := c.order[h]
-		if !ok {
-			c.nextOrder++
-			order = c.nextOrder
-			c.order[h] = order
-		}
-		groups[monitor] = append(groups[monitor], windowItem{h, monitor, order})
+	c.groups = make(map[uintptr][]windowItem)
+	c.shell = called(pGetShellWindow)
+	called(pEnumWindows, enumCallback, 0)
+	return c.groups
+}
+
+var enumCallback = syscall.NewCallback(collectWindow)
+
+func collectWindow(h, _ uintptr) uintptr {
+	c := app
+
+	if h == c.window || h == c.shell || called(pIsWindowVisible, h) == 0 || called(pIsIconic, h) != 0 || called(pGetWindowTextLength, h) == 0 {
 		return 1
-	})
-	called(pEnumWindows, cb, 0)
-	return groups
+	}
+	ex := called(pGetWindowLong, h, gwlExStyle)
+	if ex&(wsExToolWindow|wsExNoActivate) != 0 {
+		return 1
+	}
+	if called(pGetWindow, h, gwOwner) != 0 && ex&wsExAppWindow == 0 {
+		return 1
+	}
+	var cloaked uint32
+	if called(pDwmGetWindowAttribute, h, dwmwaCloaked, uintptr(unsafe.Pointer(&cloaked)), unsafe.Sizeof(cloaked)) == 0 && cloaked != 0 {
+		return 1
+	}
+	var name [128]uint16
+	called(pGetClassName, h, uintptr(unsafe.Pointer(&name[0])), 128)
+	switch syscall.UTF16ToString(name[:]) {
+	case "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "NotifyIconOverflowWindow":
+		return 1
+	}
+	monitor := called(pMonitorFromWindow, h, monitorNearest)
+	if monitor == 0 {
+		return 1
+	}
+	info := monitorInfo{Size: uint32(unsafe.Sizeof(monitorInfo{}))}
+	if called(pGetMonitorInfo, monitor, uintptr(unsafe.Pointer(&info))) == 0 {
+		return 1
+	}
+	var rect Rectangle
+	if called(pGetWindowRect, h, uintptr(unsafe.Pointer(&rect))) == 0 {
+		return 1
+	}
+	if rect.Width() < 90 || rect.Height() < 50 {
+		return 1
+	}
+	// Do not touch borderless fullscreen windows (including games).
+	style := called(pGetWindowLong, h, gwlStyle)
+	if style&wsCaption == 0 && rect.Width() >= info.Monitor.Width()-2 && rect.Height() >= info.Monitor.Height()-2 {
+		return 1
+	}
+	order, ok := c.order[h]
+	if !ok {
+		c.nextOrder++
+		order = c.nextOrder
+		c.order[h] = order
+	}
+	c.groups[monitor] = append(c.groups[monitor], windowItem{h, monitor, order})
+	return 1
 }
 
 func (c *controller) retile() {
@@ -452,13 +518,14 @@ func (c *controller) retile() {
 	}
 	c.reflowing = true
 	defer func() { c.reflowing = false }()
+	next := make(map[uintptr]move)
 	for monitor, items := range c.candidates() {
 		info := monitorInfo{Size: uint32(unsafe.Sizeof(monitorInfo{}))}
 		if called(pGetMonitorInfo, monitor, uintptr(unsafe.Pointer(&info))) == 0 {
 			continue
 		}
 		sort.Slice(items, func(i, j int) bool { return items[i].order < items[j].order })
-		tiles := calculateTiles(info.Work, len(items), 12)
+		tiles := masterTiles(info.Work, len(items), c.profile.Gap, c.profile.MasterPercent)
 		if len(tiles) != len(items) {
 			continue
 		}
@@ -484,12 +551,23 @@ func (c *controller) retile() {
 			if called(pIsZoomed, h) != 0 {
 				called(pShowWindow, h, swRestore)
 			}
-			called(pSetWindowPos, h, 0, uintptr(int32(dst.Left)), uintptr(int32(dst.Top)), uintptr(int32(dst.Width())), uintptr(int32(dst.Height())), swpNoZOrder|swpNoActivate|swpNoOwnerZOrder)
+			if old, ok := c.moves[h]; ok && old.to == dst {
+				next[h] = old
+			} else {
+				next[h] = move{actual, dst, time.Now()}
+			}
 		}
+	}
+	c.moves = next
+	c.animate()
+	if len(c.moves) > 0 {
+		called(pSetTimer, c.window, 2, 16, 0)
 	}
 }
 
 func (c *controller) restoreAll() {
+	clear(c.moves)
+	called(pKillTimer, c.window, 2)
 	for h, p := range c.original {
 		if isWindow(h) {
 			called(pSetWindowPlacement, h, uintptr(unsafe.Pointer(&p)))

@@ -1,0 +1,53 @@
+name: Silk Windows
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - run: go test ./...
+      - run: go build -trimpath -ldflags="-H windowsgui -s -w" -o Silk.exe .
+      - name: Check Windows setup scripts and launch
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem setup/*.ps1 | ForEach-Object {
+            $errors = $null
+            $tokens = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors)
+            if ($errors) {throw ($errors -join [Environment]::NewLine)}
+          }
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public class SilkSmoke {
+            [DllImport("user32", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls,string title);
+            [DllImport("user32")] public static extern bool PostMessage(IntPtr hwnd,uint msg,IntPtr w,IntPtr l);
+          }
+          '@
+          $env:APPDATA = Join-Path $env:RUNNER_TEMP 'silk-profile'
+          $process = Start-Process .\Silk.exe -PassThru
+          try {
+            for ($i=0;$i -lt 50;$i++) {
+              $bar = [SilkSmoke]::FindWindow('SilkSurface','Silk bar')
+              if ($process.HasExited -or $bar -ne [IntPtr]::Zero) {break}
+              Start-Sleep -Milliseconds 100
+            }
+            if ($bar -eq [IntPtr]::Zero) {throw 'Silk bar window missing'}
+            $controller=[SilkSmoke]::FindWindow('SilkPrototypeHiddenWindow','Silk')
+            if (![SilkSmoke]::PostMessage($controller,16,0,0)) {throw 'Could not request exit'}
+            if (!$process.WaitForExit(5000) -or $process.ExitCode -ne 0) {throw 'Silk failed to exit cleanly'}
+          } finally {if (!$process.HasExited) {$process.Kill()}}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Silk-Windows-x64
+          path: |
+            Silk.exe
+            setup/
+            README.md

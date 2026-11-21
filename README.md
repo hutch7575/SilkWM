@@ -1,34 +1,48 @@
-<div align="center">
+# Silk
 
-<img src="./resources/assets/logo.svg" width="260" alt="SilkWM logo" />
+A configurable desktop for Windows 10 and 11, built on the original SilkWM tiler. The default is a compact dark bar, a blue desktop reveal and a master window with a stack beside it. The shared theme and minimal desktop take inspiration from [osyx](https://github.com/rccyx/osyx).
 
-</div>
+## Run Silk
 
----
+Extract the Windows x64 build to a permanent folder and launch **Silk.exe** as your normal user. Click the top bar or tray icon to open its menu. Pause or exit restores the captured positions of managed windows. To start at sign-in, run `.\setup\Set-SilkStartup.ps1` in Windows PowerShell from the extracted folder. Add `-Remove` to remove the startup shortcut. Exit the old SilkWM prototype before starting Silk.
 
-<div align="center">
+## Customise your desktop
 
-**An actually smooth window manager.**
+Choose **Edit profile** from the menu, save, then choose **Reload profile**. Silk creates the file in `%APPDATA%\Silk\profile.json`. Omitted fields use defaults. An invalid reload leaves the current desktop running and explains the error.
 
-</div>
+| Setting | Default | Accepted values |
+| --- | --- | --- |
+| gap | 12 | 0–100 physical pixels between tiles |
+| masterPercent | 60 | 10–90 percent of the available row |
+| motionMs | 180 | 0–1500; zero snaps immediately |
+| barHeight | 32 | 0–100 physical pixels; zero hides and releases the bar |
+| widgets | ["silk","status","clock"] | Ordered list of silk, status, clock, date |
+| surface / text | #181B20 / #E7EAF0 | Bar background and label colour, #RRGGBB |
+| transition / fadeMs | #195AB4 / 550 | Overlay colour and duration, 0–3000 ms; zero disables the fade |
 
-## Prototype (Windows)
+The primary monitor's bar reserves desktop space through the Windows AppBar API. Tiling uses each monitor's work area, skips hidden, minimised and borderless fullscreen windows, and eases ordinary windows into position. Apps with minimum sizes or elevated permissions can resist tiling. **Preview desktop fade** plays the session-entry transition. **Restart Windows** asks for confirmation and plays the transition into the Windows restart request. Restarts started outside Silk follow the usual Windows path.
 
-An early, experimental auto-tiling prototype. **This version does not have animations yet.**
+## Sign-in and boot
 
-- Automatically arranges ordinary windows in a **60% master / stacked-right** layout.
-- Tiles independently on each monitor, respecting the taskbar's work area.
-- Ignores minimized, hidden, tool and borderless fullscreen windows.
-- Lives in the notification area (system tray). Right-click the SilkWM icon to **Pause tiling**, **Rearrange windows**, or **Exit**.
-- On pause or exit, attempts to restore windows to their original locations.
-- Does not require administrator access, an installer, or external runtime dependencies.
+Run the scripts below in Windows PowerShell 5.1. The desktop executable needs no elevation.
 
-**Run:** download `SilkWM.exe` from a build or compile it yourself, launch it, and find its icon in the system tray (possibly under the `^` overflow menu). To exit, use the tray menu. SilkWM does not run on Windows startup automatically.
+| Stage | How to customise it |
+| --- | --- |
+| Your lock and sign-in picture | Run `.\setup\Set-SilkLockScreen.ps1` to generate a picture matching the profile's transition colour, or pass `-Image C:\Pictures\lock.jpg`. Enable **Show the lock screen background picture on the sign-in screen** in Windows Settings. Select a different picture there to reset. Rerun the script after changing the colour. |
+| Signed-out machine default | On Enterprise, Education and IoT Enterprise, run `.\setup\Set-SilkSignIn.ps1 -Image C:\Pictures\lock.jpg` as administrator. This sets the Windows policy for the default lock and logon image. Use `-Restore` to remove Silk's policy. Domain policy can override local settings. |
+| Session handover | Silk renders the blue fade when its startup shortcut runs and after an unlock notification. Windows controls the secure desktop and timing of the handover. Startup apps may be delayed, so the desktop can appear briefly first. Windows supplies password, PIN and Hello controls. |
+| Before sign-in | On an eligible Enterprise, Education or IoT Enterprise installation, run `.\setup\Set-SilkBoot.ps1 Status` as administrator. `Hide` enables Unbranded Boot and suppresses standard Windows boot visuals. If the optional feature needs a restart, run Hide again afterwards. `Restore` removes Silk's boot setting; the optional component stays installed. Check that you have your BitLocker recovery key before editing boot settings. |
+| Restart | Silk owns its initial restart fade. Windows owns the subsequent restart, servicing and recovery screens. Microsoft documents UEFI BGRT as the supported route for an OEM startup logo. Unbranded Boot offers suppression only. |
 
-**Build (Windows, Go 1.23+):**
+[Microsoft Unbranded Boot](https://learn.microsoft.com/windows/configuration/unbranded-boot/) · [Microsoft Custom Logon](https://learn.microsoft.com/windows/configuration/custom-logon/)
+
+## Build
+
+Use Go 1.23 or newer. The supported targets are Windows x64 and ARM64.
 
 ```powershell
-go build -trimpath -ldflags="-H windowsgui -s -w" -o SilkWM.exe .
+go test ./...
+go build -trimpath -ldflags="-H windowsgui -s -w" -o Silk.exe .
 ```
 
-**Known limitations:** prototype only; no workspaces, resize shortcuts, per-app rules or animations. Some elevated or protected applications can't be repositioned by a normal-user process. Windows that enforce a minimum size may not fit their assigned tile. Consider testing with a few ordinary apps first. No system settings are modified.
+The Windows workflow builds the x64 executable, checks setup script syntax, launches Silk, checks for its bar window, requests a clean exit and packages the binary with the scripts.
