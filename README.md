@@ -8,6 +8,10 @@ Extract the Windows x64 build to a permanent folder and launch **Silk.exe** as y
 
 Choose **Use Silk wallpaper** in the bar menu to apply the included Midnight Silk artwork, or keep your current wallpaper. Wallpaper changes are sampled in the background. The tint follows the Windows system wallpaper and uses your transition colour if sampling fails. Silk honours the Windows animation setting.
 
+## App Finder
+
+Tap either Windows key and type an app name. Each edit lifts the query into the centre of a dimmed gradient. Use the arrows to select, Enter or a click to launch, and Escape to dismiss. The finder uses Start menu shortcuts and installed app IDs, including Store apps. Results refresh in the background. Windows key combinations pass through. **Ctrl+Alt+Space** and the bar’s **Find an app** item are alternative entry points. Set `"winFinder": false` in the profile and reload to restore the ordinary Start key.
+
 ## Customise your desktop
 
 Choose **Edit profile** from the menu, save, then choose **Reload profile**. Silk creates the file in `%APPDATA%\Silk\profile.json`. Omitted fields use defaults. An invalid reload leaves the current desktop running and explains the error.
@@ -31,13 +35,17 @@ Run the scripts below in Windows PowerShell 5.1. The desktop executable needs no
 
 | Stage | How to customise it |
 | --- | --- |
-| Your lock and sign-in picture | Run `.\setup\Set-SilkLockScreen.ps1` to apply the bundled Midnight Silk artwork, or pass `-Image C:\Pictures\lock.jpg`. Enable **Show the lock screen background picture on the sign-in screen** in Windows Settings. Select a different picture there to reset. |
+| Your lock and sign-in picture | Run `.\setup\Set-SilkLockScreen.ps1` to render and apply a matching gradient based on your current accent, or pass `-Image C:\Pictures\lock.jpg`. Enable **Show the lock screen background picture on the sign-in screen** in Windows Settings. Select a different picture there to reset. |
 | Signed-out machine default | On Enterprise, Education and IoT Enterprise, run `.\setup\Set-SilkSignIn.ps1 -Image C:\Pictures\lock.jpg` as administrator. This sets the Windows policy for the default lock and logon image. Use `-Restore` to remove Silk's policy. Domain policy can override local settings. |
 | Session handover | Silk renders the blue fade when its startup shortcut runs and after an unlock notification. Windows controls the secure desktop and timing of the handover. Startup apps may be delayed, so the desktop can appear briefly first. Windows supplies password, PIN and Hello controls. |
 | Before sign-in | On an eligible Enterprise, Education or IoT Enterprise installation, run `.\setup\Set-SilkBoot.ps1 Status` as administrator. `Hide` enables Unbranded Boot and suppresses standard Windows boot visuals. If the optional feature needs a restart, run Hide again afterwards. `Restore` removes Silk's boot setting; the optional component stays installed. Check that you have your BitLocker recovery key before editing boot settings. |
 | Restart | Silk owns its initial restart fade. Windows owns the subsequent restart, servicing and recovery screens. Microsoft documents UEFI BGRT as the supported route for an OEM startup logo. Unbranded Boot offers suppression only. |
 
 [Microsoft Unbranded Boot](https://learn.microsoft.com/windows/configuration/unbranded-boot/) · [Microsoft Custom Logon](https://learn.microsoft.com/windows/configuration/custom-logon/)
+
+## Optional firmware animation
+
+The [Silk preboot splash](preboot/README.md) is a separate x64 UEFI application for compatible firmware. It plays a moving ribbon before handing over to Windows Boot Manager. The Windows build never installs it automatically. Secure Boot requires a trusted signature. Windows owns its later boot visuals and secure credential controls.
 
 ## Build
 

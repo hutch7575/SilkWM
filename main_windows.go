@@ -197,6 +197,7 @@ type iconInfo struct {
 }
 
 type controller struct {
+	finder         finderUI
 	window         uintptr
 	icon           uintptr
 	mutex          uintptr
@@ -221,6 +222,26 @@ func isWindow(h uintptr) bool                             { return called(pIsWin
 
 func main() {
 	runtime.LockOSThread()
+	if len(os.Args) == 3 && os.Args[1] == "--signin-art" {
+		p, e := readProfile()
+		if e != nil {
+			os.Exit(1)
+		}
+		accent, _ := colorRef(p.Transition)
+		if p.Accent != "auto" {
+			accent, _ = colorRef(p.Accent)
+		} else if c, e := sampleFile(activeWallpaper()); e == nil {
+			accent = c
+		}
+		if signInArt(os.Args[2], readable(accent, rgb(8, 10, 20))) != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	ole := syscall.NewLazyDLL("ole32.dll")
+	if hr := called(ole.NewProc("OleInitialize"), 0); int32(hr) >= 0 {
+		defer called(ole.NewProc("OleUninitialize"))
+	}
 	// Keep coordinates in physical pixels on mixed-DPI, multi-monitor setups.
 	if called(pSetProcessDpiAwarenessContext, ^uintptr(3)) == 0 {
 		called(pSetProcessDPIAware)
@@ -260,6 +281,7 @@ func (c *controller) run() {
 	c.addTray()
 	c.hookEvents()
 	c.surfaces.start(c)
+	c.finder.start()
 	c.schedule()
 	var m msg
 	for {
@@ -267,12 +289,16 @@ func (c *controller) run() {
 		if int32(r) <= 0 {
 			break
 		}
+		if c.finder.key(m) {
+			continue
+		}
 		called(pTranslateMessage, uintptr(unsafe.Pointer(&m)))
 		called(pDispatchMessage, uintptr(unsafe.Pointer(&m)))
 	}
 	for _, hook := range c.hooks {
 		called(pUnhookWinEvent, hook)
 	}
+	c.finder.stop()
 	c.surfaces.stop(c)
 	c.restoreAll()
 	called(pShellNotifyIcon, nimDelete, uintptr(unsafe.Pointer(&c.tray)))
@@ -325,6 +351,17 @@ func windowProc(hwnd uintptr, message uintptr, wparam uintptr, lparam uintptr) u
 		return 0
 	}
 	switch message {
+	case catalogueReady:
+		app.finder.received(wparam != 0)
+		return 0
+	case finderToggle:
+		app.finder.open()
+		return 0
+	case 0x312:
+		if wparam == 10 {
+			app.finder.open()
+		}
+		return 0
 	case 0x02b1: // WM_WTSSESSION_CHANGE
 		if wparam == 8 {
 			app.surfaces.fade(false)
@@ -445,8 +482,15 @@ func (c *controller) showMenu() {
 			break
 		}
 		c.profile = p
+		if p.WinFinder && c.finder.host != 0 {
+			c.finder.tap.start()
+		} else {
+			c.finder.tap.stop()
+		}
 		c.surfaces.resetBar()
 		c.schedule()
+	case 108:
+		c.finder.open()
 	case 105:
 		c.surfaces.fade(false)
 	case 106:

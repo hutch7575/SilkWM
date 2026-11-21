@@ -5,8 +5,10 @@ import (
 	"image"
 	"image/jpeg"
 	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -78,6 +80,26 @@ func TestDesktopPaint(t *testing.T) {
 		}
 		e = jpeg.Encode(f, preview, &jpeg.Options{Quality: 93})
 		f.Close()
+		if e != nil {
+			t.Fatal(e)
+		}
+		// Render a typed query through the same painter as the live overlay.
+		fnd := &app.finder
+		fnd.query = "v"
+		fnd.opened = time.Now().Add(-time.Second)
+		fnd.typed = fnd.opened
+		fnd.results = matches([]appEntry{{"Visual Studio Code", "1", false}, {"VLC media player", "2", false}, {"Voice Recorder", "3", false}}, fnd.query)
+		fnd.paint(dc, Rectangle{0, 0, w, h})
+		called(gdi32.NewProc("GdiFlush"))
+		for i := 0; i < len(px); i += 4 {
+			preview.Pix[i], preview.Pix[i+1], preview.Pix[i+2] = px[i+2], px[i+1], px[i]
+		}
+		out, e := os.Create(filepath.Join(filepath.Dir(path), "Silk-finder.jpg"))
+		if e != nil {
+			t.Fatal(e)
+		}
+		e = jpeg.Encode(out, preview, &jpeg.Options{Quality: 94})
+		out.Close()
 		if e != nil {
 			t.Fatal(e)
 		}

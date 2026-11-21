@@ -17,9 +17,12 @@ function Wait-StorageFile($Operation) {
     $task.GetAwaiter().GetResult()
 }
 if (!$Image) {
-    # Use the packaged desktop artwork for a continuous sign-in background.
-    $Image = Join-Path $PSScriptRoot '..\assets\midnight-silk.jpg'
-
+    $dir = Join-Path $env:LOCALAPPDATA 'Silk'
+    $null = New-Item -ItemType Directory -Force -Path $dir
+    $Image = Join-Path $dir 'Silk-SignIn.jpg'
+    $exe = Join-Path $PSScriptRoot '..\Silk.exe'
+    $render = Start-Process -FilePath $exe -ArgumentList ('--signin-art "' + $Image + '"') -Wait -PassThru
+    if ($render.ExitCode -ne 0) {throw 'Silk could not render the sign-in artwork.'}
 }
 $path = (Get-Item -LiteralPath $Image).FullName
 $file = Wait-StorageFile ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path))

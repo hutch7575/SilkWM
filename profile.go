@@ -12,6 +12,7 @@ import (
 )
 
 type Profile struct {
+	WinFinder     bool     `json:"winFinder"`
 	Accent        string   `json:"accent"`
 	Gap           int32    `json:"gap"`
 	MasterPercent int32    `json:"masterPercent"`
@@ -25,7 +26,7 @@ type Profile struct {
 }
 
 func defaults() Profile {
-	return Profile{Accent: "auto", Gap: 12, MasterPercent: 60, MotionMS: 180, BarHeight: 40, Widgets: []string{"silk", "status", "date", "clock"}, Surface: "#10131B", Text: "#E8EBF2", Transition: "#195AB4", FadeMS: 550}
+	return Profile{WinFinder: true, Accent: "auto", Gap: 12, MasterPercent: 60, MotionMS: 180, BarHeight: 40, Widgets: []string{"silk", "status", "date", "clock"}, Surface: "#10131B", Text: "#E8EBF2", Transition: "#195AB4", FadeMS: 550}
 }
 func colorRef(s string) (uintptr, error) {
 	if len(s) != 7 || s[0] != '#' {

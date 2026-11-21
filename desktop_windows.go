@@ -50,6 +50,7 @@ type paintStruct struct {
 	Reserved        [32]byte
 }
 type desktopUI struct {
+	field                           silkField
 	reduceMotion                    bool
 	wallpaper                       wallpaperWatcher
 	reserved                        Rectangle
@@ -193,7 +194,7 @@ func surfaceProc(h, msg, w, l uintptr) uintptr {
 		if h == u.bar {
 			paintBufferedBar(dc, r)
 		} else if h == u.overlay {
-			paintTransition(dc, r, u.restarting)
+			buffered(dc, r, func(dc uintptr, r Rectangle) { paintTransition(dc, r, u.restarting) })
 		}
 		called(user32.NewProc("EndPaint"), h, uintptr(unsafe.Pointer(&p)))
 		return 0
@@ -230,6 +231,7 @@ func (u *desktopUI) frame() {
 		opacity = t
 	}
 	called(setAlpha, u.overlay, 0, uintptr(math.Round(opacity*255)), 2)
+	called(invalidate, u.overlay, 0, 0)
 	if t >= 1 {
 		called(pKillTimer, app.window, 3)
 		if u.restarting {

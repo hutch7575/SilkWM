@@ -91,14 +91,15 @@ func ribbon(dc uintptr, x, y, size int32, c uintptr) {
 		called(pDeleteObject, b)
 	}
 }
-func paintBufferedBar(dc uintptr, r Rectangle) {
+func paintBufferedBar(dc uintptr, r Rectangle) { buffered(dc, r, paintBar) }
+func buffered(dc uintptr, r Rectangle, paint func(uintptr, Rectangle)) {
 	if r.Width() <= 0 || r.Height() <= 0 {
 		return
 	}
 	mem := called(gdi32.NewProc("CreateCompatibleDC"), dc)
 	bitmap := called(gdi32.NewProc("CreateCompatibleBitmap"), dc, uintptr(r.Width()), uintptr(r.Height()))
 	if mem == 0 || bitmap == 0 {
-		paintBar(dc, r)
+		paint(dc, r)
 		if mem != 0 {
 			called(gdi32.NewProc("DeleteDC"), mem)
 		}
@@ -108,7 +109,7 @@ func paintBufferedBar(dc uintptr, r Rectangle) {
 		return
 	}
 	old := called(gdi32.NewProc("SelectObject"), mem, bitmap)
-	paintBar(mem, r)
+	paint(mem, r)
 	called(gdi32.NewProc("BitBlt"), dc, 0, 0, uintptr(r.Width()), uintptr(r.Height()), mem, 0, 0, 0x00CC0020)
 	called(gdi32.NewProc("SelectObject"), mem, old)
 	called(pDeleteObject, bitmap)
@@ -116,8 +117,8 @@ func paintBufferedBar(dc uintptr, r Rectangle) {
 }
 func paintBar(dc uintptr, r Rectangle) {
 	p := colors()
-	fill(dc, r, p.surface)
-	fill(dc, Rectangle{0, r.Bottom - 1, r.Right, r.Bottom}, p.edge)
+	gradient(dc, r, blend(p.surface, p.accent, .21), p.surface, false)
+	gradient(dc, Rectangle{0, r.Bottom - 1, r.Right, r.Bottom}, blend(p.accent, p.surface, .29), p.edge, false)
 	sc := func(n int32) int32 { return scale(app.surfaces.bar, n) }
 	cy := r.Height() / 2
 	x := sc(16)
@@ -189,9 +190,10 @@ func paintTransition(dc uintptr, r Rectangle, restarting bool) {
 	base, _ := colorRef(app.profile.Transition)
 	// Preserve the profile's blue reveal with a subtle tint from the current wallpaper.
 	color := blend(base, p.accent, .18)
-	fill(dc, r, blend(color, 0, .58))
+	phase := progress(time.Since(app.surfaces.startTime), app.surfaces.duration(app.profile.FadeMS))
+	app.surfaces.field.draw(dc, r, blend(color, 0, .92), color, 1-phase)
 	size := scale(app.surfaces.bar, 60)
-	cx, cy := r.Width()/2, r.Height()/2
+	cx, cy := r.Width()/2, r.Height()/2+int32((1-phase)*float64(size)/3)
 	ribbon(dc, cx-size/2, cy-size, size, blend(color, 0xffffff, .8))
 	name := "Silk"
 	if restarting {
@@ -212,7 +214,7 @@ func menuRows(paused bool) []menuRow {
 		state, icon = "Resume tiling", "\ue768"
 	}
 	return []menuRow{
-		{menuPause, icon, state, false}, {menuArrange, "\ue8a9", "Arrange windows", false},
+		{108, "\ue721", "Find an app", false}, {menuPause, icon, state, true}, {menuArrange, "\ue8a9", "Arrange windows", false},
 		{103, "\ue771", "Edit profile…", true}, {104, "\ue72c", "Reload profile", false},
 		{107, "\ue91b", "Use Silk wallpaper", false}, {105, "\ue7b3", "Preview transition", false},
 		{106, "\ue777", "Restart Windows…", true}, {menuExit, "\ue8bb", "Exit Silk", false}}
@@ -282,7 +284,7 @@ func paintMenu(lp uintptr) uintptr {
 func paintMenuRow(dc uintptr, r Rectangle, row menuRow, selected bool) {
 	p := colors()
 	sc := func(n int32) int32 { return scale(app.surfaces.bar, n) }
-	fill(dc, r, p.surface)
+	gradient(dc, r, blend(p.surface, p.accent, .09), p.surface, false)
 	if row.group {
 		y := r.Top + sc(4)
 		fill(dc, Rectangle{r.Left + sc(12), y, r.Right - sc(12), y + 1}, p.edge)
